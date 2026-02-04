@@ -4,9 +4,7 @@ PRODID:-//GCatholic HK//mxm.io//
 X-WR-CALNAME:天主教香港教区礼仪日历 2026
 X-WR-TIMEZONE:Asia/Hong_Kong
 BEGIN:VEVENT
-SUMMARY:暂无数据或抓取受阻
+SUMMARY:暂无数据
 DTSTART;VALUE=DATE:20260101
-DESCRIPTION:请检查 GitHub Actions 日志中的网页标题，确认是
- 否被反爬虫拦截。
 END:VEVENT
 END:VCALENDAR
