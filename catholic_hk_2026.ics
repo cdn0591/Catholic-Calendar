@@ -1,12 +1,12 @@
 BEGIN:VCALENDAR
 VERSION:2.0
-PRODID:-//GCatholic HK Calendar//mxm.io//
-METHOD:PUBLISH
+PRODID:-//GCatholic HK//mxm.io//
 X-WR-CALNAME:天主教香港教区礼仪日历 2026
 X-WR-TIMEZONE:Asia/Hong_Kong
 BEGIN:VEVENT
-SUMMARY:日历数据暂未更新或抓取失败
+SUMMARY:暂无数据或抓取受阻
 DTSTART;VALUE=DATE:20260101
-DESCRIPTION:请检查 GitHub Actions 运行记录
+DESCRIPTION:请检查 GitHub Actions 日志中的网页标题，确认是
+ 否被反爬虫拦截。
 END:VEVENT
 END:VCALENDAR
