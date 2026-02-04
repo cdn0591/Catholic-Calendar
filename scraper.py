@@ -7,9 +7,6 @@ import hashlib
 import time
 import random
 
-# ===========================
-# 1. 网络请求模块 (保持不变，因为已经成功)
-# ===========================
 def fetch_calendar_data(url):
     user_agents = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -29,10 +26,9 @@ def fetch_calendar_data(url):
             response = requests.get(url, headers=headers, timeout=30)
             response.encoding = 'utf-8'
             
-            # 调试：打印网页标题
             page_title = ""
             try:
-                soup_check = BeautifulSoup(response.text[:10000], 'html.parser')
+                soup_check = BeautifulSoup(response.text[:5000], 'html.parser')
                 page_title = soup_check.title.string.strip() if soup_check.title else "无标题"
             except:
                 pass
@@ -53,67 +49,128 @@ def fetch_calendar_data(url):
             
     return None
 
-# ===========================
-# 2. 解析模块 (核心修改：改回链接扫描)
-# ===========================
 def parse_html(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     events = []
     
-    # 查找页面上所有的链接 <a>
-    all_links = soup.find_all('a', href=True)
-    print(f"🔍 页面共包含 {len(all_links)} 个链接，开始筛选有效数据...")
+    # 获取所有表格单元格
+    cells = soup.find_all('td')
+    print(f"🔍 扫描到 {len(cells)} 个单元格，开始按视觉顺序解析...")
+    
+    # 调试：打印前几个包含链接的单元格内容，帮助诊断
+    debug_count = 0
+    for cell in cells[:50]:
+        if cell.find('a'):
+            debug_count += 1
+            if debug_count <= 3:
+                print(f"   [调试样本] {cell.get_text(strip=True)[:30]}...")
 
-    seen_keys = set()
-    valid_count = 0
-
-    for link in all_links:
-        try:
-            href = link['href']
-            text = link.get_text(strip=True)
-            
-            # 1. 核心特征：链接地址里包含 2026xxxx 这样的日期
-            # 无论是 #d20260101 还是 /20260101.htm 都能匹配
-            date_match = re.search(r'(2026)(\d{2})(\d{2})', href)
-            
-            if not date_match:
-                continue
-
-            # 提取日期
-            year, month, day = map(int, date_match.groups())
-            
-            # 2. 过滤掉纯数字链接 (那是日历上的日期号数，不是节日名)
-            if text.isdigit():
-                continue
-                
-            # 3. 过滤掉无意义的短词
-            if len(text) < 2 or text in ['Ordo', 'Mass', 'Readings', 'Lit.', 'D', 'L', 'R', 'W', 'V', 'G', 'P']:
-                continue
-
-            # 4. 成功匹配
-            dt = datetime(year, month, day)
-            summary = text.replace('\n', ' ').strip()
-            
-            # 去重键 (日期+名称)
-            key = f"{dt.strftime('%Y%m%d')}_{summary}"
-            
-            if key not in seen_keys:
-                events.append({'date': dt, 'summary': summary})
-                seen_keys.add(key)
-                valid_count += 1
-                
-        except Exception:
+    current_month = 1
+    current_day = 0
+    year = 2026
+    
+    for cell in cells:
+        # 获取所有文本
+        text = cell.get_text(strip=True)
+        if not text:
             continue
 
-    print(f"✅ 筛选出 {valid_count} 条有效节日数据")
-    
-    # 按日期排序
-    events.sort(key=lambda x: x['date'])
+        # 1. 提取日期数字
+        # 策略：寻找开头的一到两位数字。
+        # 兼容 "1", "01", "1日", "1月" 等格式
+        day_match = re.match(r'^(\d{1,2})', text)
+        
+        # 备选：有时候数字被包在 div 里，不在开头
+        if not day_match:
+             # 找 cell 内部是否有专门的日期类
+             day_num_tag = cell.find(class_=re.compile(r'day|date|num', re.I))
+             if day_num_tag:
+                 day_match = re.search(r'(\d{1,2})', day_num_tag.get_text())
+        
+        # 如果还是没找到，尝试在纯文本里找单独的数字
+        if not day_match:
+            # 查找独立的数字，前后不是字母或数字
+            # 在中文里 \b 不好用，所以我们用简单的查找
+            nums = re.findall(r'\d+', text)
+            if nums:
+                # 假设日历格子里第一个数字就是日期
+                possible_day = int(nums[0])
+                if 1 <= possible_day <= 31:
+                    # 验证逻辑：必须是递增的，或者是下个月的1号
+                    if possible_day == current_day + 1 or (possible_day == 1 and current_day >= 28):
+                        day_match = re.match(r'()', '') # 伪造一个 match 对象
+                        matched_day = possible_day
+                    else:
+                        # 可能是干扰数字（如年份2026），跳过
+                        pass
+
+        if not day_match and 'matched_day' not in locals():
+            continue
+            
+        # 确定日期
+        if 'matched_day' in locals():
+            d = matched_day
+            del matched_day # 重置
+        else:
+            d = int(day_match.group(1))
+
+        # 2. 逻辑校验与月份切换
+        if d > 31 or d < 1:
+            continue
+            
+        # 关键逻辑：如果日期变小（如从31变回1），说明进入下个月
+        if d < current_day:
+            current_month += 1
+            if current_month > 12:
+                break # 防止溢出到下一年
+        
+        # 如果日期跳跃太大（如1号直接变10号），可能是读错了，忽略
+        if d > current_day + 1 and not (d == 1 and current_day == 0):
+             # 允许少量跳跃（日历空白格），但通常日历td是连续的
+             pass
+
+        current_day = d
+        
+        # 3. 提取节日内容
+        # 查找格子里所有的链接文本
+        links = cell.find_all('a')
+        day_summaries = []
+        
+        for link in links:
+            t = link.get_text(strip=True)
+            # 过滤掉纯数字、无意义短词
+            if (len(t) > 1 and 
+                not t.isdigit() and 
+                t not in ['Ordo', 'Mass', 'Readings', 'W', 'R', 'G', 'V', 'P', 'D', 'L']):
+                day_summaries.append(t)
+        
+        # 如果没有链接，尝试找 span
+        if not day_summaries:
+             spans = cell.find_all('span')
+             for span in spans:
+                 t = span.get_text(strip=True)
+                 if len(t) > 1 and not t.isdigit():
+                     day_summaries.append(t)
+
+        # 4. 保存
+        if day_summaries:
+            try:
+                dt = datetime(year, current_month, d)
+                for summary in day_summaries:
+                    # 去重
+                    is_duplicate = False
+                    for existing in events:
+                        if existing['date'] == dt and existing['summary'] == summary:
+                            is_duplicate = True
+                            break
+                    if not is_duplicate:
+                        events.append({'date': dt, 'summary': summary})
+            except ValueError:
+                continue
+
+    print(f"✅ 从表格中解析出 {len(events)} 条数据")
     return events
 
-# ===========================
-# 3. 生成模块
-# ===========================
 def generate_ics(events, output_file):
     cal = Calendar()
     cal.add('prodid', '-//GCatholic HK//mxm.io//')
@@ -122,9 +179,9 @@ def generate_ics(events, output_file):
     cal.add('x-wr-timezone', 'Asia/Hong_Kong')
     
     if not events:
-        print("⚠️ 警告：没有抓取到任何事件，生成占位文件。")
+        print("⚠️ 警告：没有抓取到任何事件")
         event = Event()
-        event.add('summary', '暂无数据 - 请检查脚本')
+        event.add('summary', '暂无数据 - 请检查 GitHub Actions 日志')
         event.add('dtstart', datetime(2026, 1, 1).date())
         cal.add_component(event)
     else:
@@ -134,7 +191,6 @@ def generate_ics(events, output_file):
             
             event.add('summary', e['summary'])
             event.add('dtstart', e['date'].date())
-            # 全天事件：结束时间 = 开始时间 + 1天
             event.add('dtend', (e['date'] + timedelta(days=1)).date())
             event.add('uid', uid)
             cal.add_component(event)
@@ -151,7 +207,7 @@ if __name__ == "__main__":
     if html:
         extracted_events = parse_html(html)
         generate_ics(extracted_events, OUTPUT_PATH)
-        print(f"🎉 处理完成！文件已生成: {OUTPUT_PATH}")
+        print(f"🎉 文件已生成: {OUTPUT_PATH}")
     else:
-        print("❌ 致命错误：无法获取网页内容")
+        print("❌ 无法获取网页")
         generate_ics([], OUTPUT_PATH)
