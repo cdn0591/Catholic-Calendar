@@ -47,15 +47,23 @@ def parse_html(html_content):
     current_day = 0
     year = 2026
     
-    # 排除词列表：如果是这些词，就绝对不是节日
-    exclude_keywords = ['星期', '主日', '日期']
-    exclude_exact = ['自*', '自', 'O', 'M', 'F', 'S', 'P', 'W', 'R', 'G', 'V', 'L', 'D', 'Lit.', 'Ordo']
+    # 1. 模糊匹配黑名单 (只要包含就过滤)
+    # 移除 '星期', '主日'，防止误杀 "四旬期第一周星期六" 或 "四旬期第一主日"
+    exclude_keywords_partial = ['日期']
+    
+    # 2. 精确匹配黑名单 (只有完全等于这些词才过滤)
+    # 用于过滤表格第二列的纯星期名
+    exclude_exact_match = [
+        '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日', '主日',
+        '自*', '自', 'O', 'M', 'F', 'S', 'P', 'W', 'R', 'G', 'V', 'L', 'D', 'Lit.', 'Ordo'
+    ]
+    
     month_names = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月']
 
     for row in rows:
         row_text = row.get_text(strip=True)
         
-        # --- 1. 日期定位逻辑 (保持稳健) ---
+        # --- 1. 日期定位逻辑 ---
         day_num = None
         
         # A. 优先匹配 "M月D日" (跨月行)
@@ -87,54 +95,53 @@ def parse_html(html_content):
                 current_month += 1
             current_day = day_num
         else:
-            # 如果没找到日期，检查是否为干扰行
             if current_day == 0: continue
             if row_text in month_names or "月" in row_text and len(row_text) < 4: continue
-            if "星期" in row_text and "日期" in row_text: continue
-            # 否则认为是 rowspan 的延续行，继续使用 current_day
+            # 这里的逻辑也要放宽，不要因为有“星期”就跳过整行，因为节日名可能包含它
+            if "星期" in row_text and "日期" in row_text: continue # 仅跳过表头
             pass
 
-        # --- 2. 节日内容提取逻辑 (核心修改) ---
+        # --- 2. 节日内容提取逻辑 ---
         cells = row.find_all(['td', 'th'])
         day_summaries = []
 
         for cell in cells:
-            # 获取该单元格的完整文本（包含括号里的内容）
-            # separator=' ' 防止文字粘连
             cell_text = cell.get_text(strip=True, separator=' ')
             
-            # === 强力过滤器 ===
-            
-            # 1. 过滤纯数字/日期 (如 "21", "2月21日")
+            # 1. 过滤纯数字/日期
             if re.match(r'^[\d\s/-]+$', cell_text) or re.match(r'^\d+月\d+日$', cell_text):
                 continue
             
-            # 2. 过滤星期和月份
-            if any(k in cell_text for k in exclude_keywords):
-                continue
+            # 2. 过滤纯月份名
             if cell_text in month_names:
                 continue
 
-            # 3. 过滤 "自*"、"自" 等特定干扰项
-            # 检查完全匹配
-            if cell_text in exclude_exact:
+            # 3. 精确过滤 (纯星期名、自* 等)
+            if cell_text in exclude_exact_match:
                 continue
-            # 检查是否只包含干扰词 (针对 "自 " 这种情况)
+            
+            # 4. 模糊过滤 (日期表头)
+            if any(k in cell_text for k in exclude_keywords_partial):
+                continue
+
+            # 5. 针对 "自 *" 的处理
             if cell_text.replace('*', '').strip() in ['自', 'O', 'M']:
                 continue
             
-            # 4. 过滤过短且非中文的内容 (通常是 CSS 代码或空点)
+            # 6. 过滤过短且非中文的内容
             if len(cell_text) < 2 and not re.search(r'[\u4e00-\u9fff]', cell_text):
                 continue
 
             # === 文本清洗 ===
-            # 移除混在文本里的 "自*" (如果有)
+            # 移除混在文本里的 "自*"
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             
-            # 移除可能的开头数字 (如果是日期残留)
+            # 移除可能的开头数字
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
+            
+            # 重要：不再移除“星期X”！保留节日名称的完整性。
+            # 之前这里有一行 re.sub(r'星期...', ...) 被删除了
 
-            # 最终检查
             if len(clean_text) > 1:
                 day_summaries.append(clean_text)
 
