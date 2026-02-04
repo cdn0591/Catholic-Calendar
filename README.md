@@ -8,7 +8,10 @@
 
 获取原始文件链接：
 
-在此 GitHub 仓库中找到 catholic_hk_2026.ics 文件。
+在此 GitHub 仓库中找到 catholic_hk_2026.ics 文件。繁体版
+在此 GitHub 仓库中找到 catholic_cn_2026.ics 文件。简体版
+各位按需选择
+
 
 点击该文件，然后点击 "Raw" 按钮。
 
