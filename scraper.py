@@ -26,7 +26,6 @@ def fetch_calendar_data(url):
             response = requests.get(url, headers=headers, timeout=30)
             response.encoding = 'utf-8'
             
-            # 简单检查
             if response.status_code == 200:
                 return response.text
                 
@@ -40,14 +39,7 @@ def parse_html(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     events = []
     
-    # 调试：打印页面中前 5 个链接的完整信息，帮助定位问题
-    print("🔍 [调试信息] 页面链接样本:")
-    sample_links = soup.find_all('a', href=True, limit=5)
-    for i, link in enumerate(sample_links):
-        print(f"   Link {i+1}: Text='{link.get_text(strip=True)}' | Href='{link['href']}'")
-
-    # 策略升级：按“行” (tr) 解析
-    # 日历通常是一行一行排列的
+    # 策略：按表格行 (tr) 解析，并处理 rowspan 情况
     rows = soup.find_all('tr')
     print(f"🔍 扫描到 {len(rows)} 个表格行，开始解析...")
 
@@ -55,15 +47,16 @@ def parse_html(html_content):
     current_day = 0
     year = 2026
     
+    # 定义中文月份，用于排除月份标题行
+    month_names = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月']
+
     for row in rows:
-        # 获取该行所有文本
         row_text = row.get_text(strip=True)
         
-        # 1. 尝试寻找日期数字
-        # 匹配规则：行首的数字，或包含 "M月D日" 格式
+        # --- 1. 尝试寻找日期 ---
         day_num = None
         
-        # 优先匹配中文日期格式 "1月1日" 或 "1/1"
+        # A. 优先匹配 "M月D日" 格式 (针对跨月部分)
         date_match = re.search(r'(\d{1,2})\s*[月/]\s*(\d{1,2})', row_text)
         if date_match:
             try:
@@ -75,34 +68,42 @@ def parse_html(html_content):
             except:
                 pass
         
-        # 如果没有中文格式，尝试找行内的独立数字
+        # B. 尝试找行内的独立数字单元格 (针对普通日期行)
         if day_num is None:
-            # 获取行内所有单元格
             cells = row.find_all(['td', 'th'])
             for cell in cells:
-                # 检查单元格是否只包含数字（可能是日期格）
                 ctext = cell.get_text(strip=True)
                 if ctext.isdigit():
                     d = int(ctext)
+                    # 逻辑校验：日期应该是递增的，或者换月变成了1
                     if 1 <= d <= 31:
-                        # 简单的逻辑判断：日期应该是递增的
-                        if d == current_day + 1 or d == 1:
-                            day_num = d
-                            break
-                        # 或者是当前日期（同一天的不同活动）
-                        elif d == current_day:
+                        if d == current_day + 1 or d == 1 or d == current_day:
                             day_num = d
                             break
         
-        if day_num is None:
-            continue
+        # --- 2. 日期状态更新与逻辑判断 ---
+        if day_num is not None:
+            # 找到了新日期，更新状态
+            if day_num < current_day and current_month < 12 and day_num == 1:
+                current_month += 1
+            current_day = day_num
+        else:
+            # === 关键修复 ===
+            # 如果没找到日期，说明可能是 rowspan 的第二行，或者是个标题行
             
-        # 更新全局日期
-        if day_num < current_day and current_month < 12 and day_num == 1:
-            current_month += 1
-        current_day = day_num
-        
-        # 2. 提取链接作为活动
+            # 排除情况1：还没开始解析到任何日期
+            if current_day == 0: continue
+            
+            # 排除情况2：是纯月份标题 (如 "三月")
+            if row_text in month_names or "月" in row_text and len(row_text) < 4: continue
+            
+            # 排除情况3：是表头 (如 "日期 星期")
+            if "星期" in row_text and "日期" in row_text: continue
+            
+            # 如果排除以上情况，我们假设这是属于 current_day 的后续活动行
+            pass
+
+        # --- 3. 提取活动 ---
         links = row.find_all('a')
         day_summaries = []
         
@@ -114,34 +115,37 @@ def parse_html(html_content):
             if (len(text) > 1 and 
                 not text.isdigit() and 
                 "Ordo" not in text and
-                "reading" not in href.lower()): # 排除读经链接
+                "reading" not in href.lower()): 
                 
                 day_summaries.append(text)
         
-        # 如果没有链接，尝试提取非数字的文本
+        # 备选：如果没有链接，尝试提取非数字的文本 (针对没有链接的节日)
         if not day_summaries:
-            # 移除数字和日期部分，剩下的可能是标题
-            clean_text = re.sub(r'\d{1,2}\s*[月/]\s*\d{1,2}', '', row_text) # 去掉 1月1日
-            clean_text = re.sub(r'^\d+', '', clean_text).strip() # 去掉行首数字
-            if len(clean_text) > 3:
+            # 移除日期数字，防止把 "15" 当作节日
+            clean_text = re.sub(r'\d{1,2}\s*[月/]\s*\d{1,2}', '', row_text)
+            # 移除行首的纯数字 (如 "15")
+            clean_text = re.sub(r'^\d+', '', clean_text).strip() 
+            # 移除 "星期X"
+            clean_text = re.sub(r'星期[一二三四五六日]', '', clean_text).strip()
+            
+            # 如果剩下的文本够长且不是无意义字符
+            if len(clean_text) > 3 and clean_text not in month_names:
+                # 再次清理可能残留的 "自*" 等标记
+                clean_text = clean_text.replace('自*', '').strip()
                 day_summaries.append(clean_text)
 
-        # 3. 保存
+        # --- 4. 保存结果 ---
         if day_summaries:
             try:
                 dt = datetime(year, current_month, current_day)
                 for summary in day_summaries:
-                    # 去重
-                    key = f"{dt}_{summary}"
-                    # 简单检查列表中是否已存在
+                    # 去重检查
                     if not any(e['date'] == dt and e['summary'] == summary for e in events):
                         events.append({'date': dt, 'summary': summary})
             except ValueError:
                 continue
 
     print(f"✅ 解析完成，共提取 {len(events)} 条数据")
-    
-    # 排序
     events.sort(key=lambda x: x['date'])
     return events
 
@@ -154,12 +158,13 @@ def generate_ics(events, output_file):
     
     if not events:
         event = Event()
-        event.add('summary', '暂无数据 - 请检查日志中的链接样本')
+        event.add('summary', '暂无数据')
         event.add('dtstart', datetime(2026, 1, 1).date())
         cal.add_component(event)
     else:
         for e in events:
             event = Event()
+            # 使用日期+摘要做 UID，确保唯一性
             uid = hashlib.md5(f"{e['date']}{e['summary']}".encode()).hexdigest() + "@gcatholic"
             
             event.add('summary', e['summary'])
