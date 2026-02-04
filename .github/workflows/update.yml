@@ -23,8 +23,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 只安装核心必需库
-        pip install requests beautifulsoup4 icalendar
+        # 添加了 zhconv 依赖
+        pip install requests beautifulsoup4 icalendar zhconv
 
     - name: Run scraper
       run: python scraper.py
@@ -33,7 +33,7 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        # 无论文件是否有变化都尝试添加，防止报错
-        git add catholic_hk_2026.ics
+        # 使用通配符 *.ics 以同时添加繁体和简体文件
+        git add *.ics
         git commit -m "Update calendar: $(date +'%Y-%m-%d')" || echo "No changes to commit"
         git push || echo "No changes to push"
