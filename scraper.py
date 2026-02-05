@@ -41,16 +41,25 @@ def fetch_calendar_data(url):
     return None
 
 # ===========================
-# 2. 颜色识别逻辑
+# 2. 颜色识别逻辑 (核心修复：增加繁体匹配)
 # ===========================
 def get_liturgical_emoji(cell_soup, row_soup, text_content):
     text_content = text_content.strip()
     
+    # 颜色特征库 (同时包含简体和繁体关键词)
     PATTERNS = {
-        "🔴 ": ["red", "day_r", "#ff0000", "#f00", "殉道", "圣枝", "圣神", "受难"],
-        "🟣 ": ["violet", "purple", "day_v", "day_p", "#800080", "四旬期", "将临期", "忏悔"],
-        "🟢 ": ["green", "day_g", "#008000", "#00ff00", "常年期"],
-        "⚪ ": ["white", "day_w", "#ffffff", "#fff", "圣诞", "复活", "圣母", "白"],
+        "🔴 ": ["red", "day_r", "#ff0000", "#f00", 
+               "殉道", "圣枝", "聖枝", "圣神", "聖神", "受难", "受難"],
+               
+        "🟣 ": ["violet", "purple", "day_v", "day_p", "#800080", 
+               "四旬期", "将临期", "將臨期", "忏悔", "懺悔"],
+               
+        "🟢 ": ["green", "day_g", "#008000", "#00ff00", 
+               "常年期"],
+               
+        "⚪ ": ["white", "day_w", "#ffffff", "#fff", 
+               "圣诞", "聖誕", "复活", "復活", "圣母", "聖母", "白"],
+               
         "🟡 ": ["gold", "yellow", "day_y", "#ffd700"],
     }
 
@@ -68,11 +77,13 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
 
     full_html_str = " | ".join(check_pool)
 
+    # 策略 A: HTML 属性匹配
     for emoji, keywords in PATTERNS.items():
         for kw in keywords:
             if not re.search(r'[\u4e00-\u9fff]', kw): 
                 if kw in full_html_str: return emoji
 
+    # 策略 B: 文本内容强制匹配 (已增强繁体支持)
     for emoji, keywords in PATTERNS.items():
         for kw in keywords:
             if kw in text_content: return emoji
@@ -144,26 +155,19 @@ def parse_html(html_content, target_year):
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
             
-            # --- 标点符号紧凑化处理 (核心修改) ---
-            
-            # 1. 括号标准化: 全角 -> 半角
+            # --- 标点符号紧凑化 ---
             clean_text = clean_text.replace('（', '(').replace('）', ')')
-            
-            # 2. 分隔符标准化: 顿号、间隔号、逗号 -> 英文句点
             for char in ['、', '，', '。', '．', '・', '‧', '･']:
                 clean_text = clean_text.replace(char, '.')
             
-            # 3. 去除空格 (紧凑化)
-            # 去除中文之间的空格 (如: 圣若瑟 劳工 -> 圣若瑟劳工)
             clean_text = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', clean_text)
-            # 去除符号周围的空格 (如: A . B -> A.B)
             clean_text = re.sub(r'\s*\.\s*', '.', clean_text)
             clean_text = re.sub(r'\s*\(\s*', '(', clean_text)
             clean_text = re.sub(r'\s*\)\s*', ')', clean_text)
-            
-            # --------------------------------
+            # ---------------------
 
             if len(clean_text) > 1:
+                # 获取颜色
                 emoji_prefix = get_liturgical_emoji(cell, row, clean_text)
                 
                 try:
@@ -216,7 +220,7 @@ if __name__ == "__main__":
     ]
     
     master_events = []
-    print("🚀 启动任务 (2026-2029) + 智能颜色 + 紧凑排版...")
+    print("🚀 启动任务 (2026-2029) + 繁体颜色匹配 + 紧凑排版...")
     
     for task in TASKS:
         if master_events: time.sleep(random.randint(5, 8))
