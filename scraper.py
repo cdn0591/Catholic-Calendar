@@ -28,7 +28,6 @@ def fetch_calendar_data(url):
             response = scraper.get(url, timeout=60)
             response.encoding = 'utf-8'
             
-            # 简单校验
             if response.status_code == 200 and len(response.text) > 2000:
                 return response.text
             
@@ -42,18 +41,11 @@ def fetch_calendar_data(url):
     return None
 
 # ===========================
-# 2. 颜色识别逻辑 (三重保险版)
+# 2. 颜色识别逻辑
 # ===========================
 def get_liturgical_emoji(cell_soup, row_soup, text_content):
-    """
-    判断礼仪颜色。优先级：
-    1. HTML 标签中的 class/style (精确匹配)
-    2. HTML 标签中的 Hex 颜色代码 (模糊匹配)
-    3. 文本关键字 (保底策略)
-    """
     text_content = text_content.strip()
     
-    # 定义颜色特征库
     PATTERNS = {
         "🔴 ": ["red", "day_r", "#ff0000", "#f00", "殉道", "圣枝", "圣神", "受难"],
         "🟣 ": ["violet", "purple", "day_v", "day_p", "#800080", "四旬期", "将临期", "忏悔"],
@@ -62,40 +54,28 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
         "🟡 ": ["gold", "yellow", "day_y", "#ffd700"],
     }
 
-    # 收集所有相关的 HTML 属性字符串
     check_pool = []
     
-    # 1. 检查单元格及其子元素
     for tag in [cell_soup] + list(cell_soup.find_all(True)):
         cls = " ".join(tag.get('class', [])).lower()
         sty = str(tag.get('style', '')).lower()
         check_pool.append(f"{cls} {sty}")
 
-    # 2. 检查整行
     if row_soup:
         r_cls = " ".join(row_soup.get('class', [])).lower()
         r_sty = str(row_soup.get('style', '')).lower()
         check_pool.append(f"{r_cls} {r_sty}")
 
-    # 合并成一个大字符串进行匹配
     full_html_str = " | ".join(check_pool)
 
-    # --- 匹配逻辑 ---
-    
-    # 策略 A: HTML 属性匹配 (最准)
     for emoji, keywords in PATTERNS.items():
         for kw in keywords:
-            # 忽略中文关键字，只匹配英文代码
             if not re.search(r'[\u4e00-\u9fff]', kw): 
-                if kw in full_html_str:
-                    return emoji
+                if kw in full_html_str: return emoji
 
-    # 策略 B: 文本内容强制匹配 (补漏)
-    # 如果 HTML 里没写颜色，但文字是 "四旬期"，那肯定是紫色
     for emoji, keywords in PATTERNS.items():
         for kw in keywords:
-            if kw in text_content: # 匹配中文
-                return emoji
+            if kw in text_content: return emoji
             
     return ""
 
@@ -112,14 +92,10 @@ def parse_html(html_content, target_year):
         return []
 
     print(f"🔍 [{target_year}] 扫描到 {len(rows)} 行，开始解析...")
-    
-    # 调试：打印前 3 行的 HTML 结构，看看颜色到底藏在哪
-    print(f"   [调试] 第一行 HTML: {str(rows[1])[:200]}...")
 
     current_month = 1
     current_day = 0
     
-    # 黑名单
     exclude_exact = [
         '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日', '主日',
         '自*', '自', 'O', 'M', 'F', 'S', 'P', 'W', 'R', 'G', 'V', 'L', 'D', 'Lit.', 'Ordo',
@@ -130,7 +106,7 @@ def parse_html(html_content, target_year):
     for row in rows:
         row_text = row.get_text(strip=True)
         
-        # --- 日期定位 ---
+        # 日期定位
         day_num = None
         date_match = re.search(r'(\d{1,2})\s*[月/]\s*(\d{1,2})', row_text)
         if date_match:
@@ -154,24 +130,40 @@ def parse_html(html_content, target_year):
             if row_text in month_names or "月" in row_text and len(row_text) < 4: continue
             if "星期" in row_text and "日期" in row_text: continue
 
-        # --- 提取内容 ---
+        # 提取内容
         for cell in row.find_all(['td', 'th']):
             cell_text = cell.get_text(strip=True, separator=' ')
             
-            # 过滤
             if re.match(r'^[\d\s/-]+$', cell_text) or re.match(r'^\d+月\d+日$', cell_text): continue
             if cell_text in month_names or cell_text in exclude_exact: continue
             if "日期" in cell_text: continue
             if cell_text.replace('*', '').strip() in ['自', 'O', 'M']: continue
             if len(cell_text) < 2 and not re.search(r'[\u4e00-\u9fff]', cell_text): continue
 
-            # 清洗文本
+            # 基础清洗
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
-            clean_text = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', clean_text) # 去除中文间空格
+            
+            # --- 标点符号紧凑化处理 (核心修改) ---
+            
+            # 1. 括号标准化: 全角 -> 半角
+            clean_text = clean_text.replace('（', '(').replace('）', ')')
+            
+            # 2. 分隔符标准化: 顿号、间隔号、逗号 -> 英文句点
+            for char in ['、', '，', '。', '．', '・', '‧', '･']:
+                clean_text = clean_text.replace(char, '.')
+            
+            # 3. 去除空格 (紧凑化)
+            # 去除中文之间的空格 (如: 圣若瑟 劳工 -> 圣若瑟劳工)
+            clean_text = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', clean_text)
+            # 去除符号周围的空格 (如: A . B -> A.B)
+            clean_text = re.sub(r'\s*\.\s*', '.', clean_text)
+            clean_text = re.sub(r'\s*\(\s*', '(', clean_text)
+            clean_text = re.sub(r'\s*\)\s*', ')', clean_text)
+            
+            # --------------------------------
 
             if len(clean_text) > 1:
-                # 获取颜色 (传入清洗后的文本用于辅助判断)
                 emoji_prefix = get_liturgical_emoji(cell, row, clean_text)
                 
                 try:
@@ -224,7 +216,7 @@ if __name__ == "__main__":
     ]
     
     master_events = []
-    print("🚀 启动任务 (2026-2029) + 智能颜色识别...")
+    print("🚀 启动任务 (2026-2029) + 智能颜色 + 紧凑排版...")
     
     for task in TASKS:
         if master_events: time.sleep(random.randint(5, 8))
@@ -241,6 +233,3 @@ if __name__ == "__main__":
         if zhconv:
             generate_ics(master_events, "catholic_calendar_2026-2029_cn.ics", "天主教礼仪日历 2026-2029 (简)", True)
         print("🎉 完成！")
-    else:
-        print("❌ 失败：无数据。")
-        sys.exit(1)
