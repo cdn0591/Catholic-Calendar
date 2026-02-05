@@ -2,14 +2,15 @@ name: Update Calendar
 
 on:
   schedule:
+    # UTC时间每周日0点运行 (北京时间周日早上8点)
     - cron: '0 0 * * 0'
-  workflow_dispatch:
+  workflow_dispatch: # 允许手动点击按钮触发
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # 必须赋予写入权限以便提交生成的ics文件
 
     steps:
     - name: Checkout repository
@@ -23,8 +24,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 添加了 zhconv 依赖
-        pip install requests beautifulsoup4 icalendar zhconv
+        # 安装 requirements.txt 中列出的所有库 (含 cloudscraper, zhconv 等)
+        pip install -r requirements.txt
 
     - name: Run scraper
       run: python scraper.py
@@ -33,7 +34,8 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        # 使用通配符 *.ics 以同时添加繁体和简体文件
+        # 添加所有生成的 .ics 文件
         git add *.ics
+        # 如果有变动则提交，没有变动(echo)防止报错
         git commit -m "Update calendar: $(date +'%Y-%m-%d')" || echo "No changes to commit"
         git push || echo "No changes to push"
