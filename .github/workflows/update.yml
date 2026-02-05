@@ -1,9 +1,9 @@
 name: Update Calendar
 
 on:
-  schedule:
+  #schedule:
     # UTC时间每周日0点运行 (北京时间周日早上8点)
-    - cron: '0 0 * * 0'
+    #- cron: '0 0 * * 0'
   workflow_dispatch: # 允许手动点击按钮触发
 
 jobs:
