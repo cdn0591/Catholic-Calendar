@@ -100,7 +100,7 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
 # ===========================
 def parse_html(html_content, target_year):
     soup = BeautifulSoup(html_content, 'html.parser')
-    local_events = [] # 暂存每一行的原始数据 (date, text)
+    local_events = [] 
     rows = soup.find_all('tr')
     
     if len(rows) < 10:
@@ -157,14 +157,19 @@ def parse_html(html_content, target_year):
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
             
+            # 标点紧凑化
             clean_text = clean_text.replace('（', '(').replace('）', ')')
             for char in ['、', '，', '。', '．', '・', '‧', '･']:
                 clean_text = clean_text.replace(char, '.')
-            
             clean_text = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', clean_text)
             clean_text = re.sub(r'\s*\.\s*', '.', clean_text)
             clean_text = re.sub(r'\s*\(\s*', '(', clean_text)
             clean_text = re.sub(r'\s*\)\s*', ')', clean_text)
+
+            # === 核心修改：移除 "圣灰礼仪后" 相关文字 ===
+            # 只要包含 "灰禮儀後" 或 "灰礼仪后"，就直接跳过该文本，不添加到日历中
+            if '灰禮儀後' in clean_text or '灰礼仪后' in clean_text:
+                continue
 
             if len(clean_text) > 1:
                 emoji_prefix = get_liturgical_emoji(cell, row, clean_text)
@@ -178,38 +183,33 @@ def parse_html(html_content, target_year):
     return local_events
 
 # ===========================
-# 4. 规则后处理 (新增: 斋戒与特定月份)
+# 4. 规则后处理 (农历与斋戒)
 # ===========================
 def process_special_rules(raw_events):
-    """
-    处理特殊规则：
-    1. 特定月份首日添加 "XX月"
-    2. 星期五添加 "小斋"
-    3. 圣灰/受难日添加 "大小斋"
-    4. 农历新年豁免 (免小斋/免大小斋)
-    """
     processed_map = {}
     
-    # 1. 先把数据按日期归档
+    # 归档
     for e in raw_events:
         dt = e['date']
         if dt not in processed_map: processed_map[dt] = []
         if e['summary'] not in processed_map[dt]:
             processed_map[dt].append(e['summary'])
 
-    # 2. 遍历每一天应用规则
     sorted_dates = sorted(processed_map.keys())
+    final_events = []
+
     for dt in sorted_dates:
         events_list = processed_map[dt]
-        combined_text = " ".join(events_list) # 用于检查关键词
+        combined_text = " ".join(events_list) 
         
-        # --- 规则 A: 农历新年检查 ---
+        # --- A. 农历计算 ---
         solar = Solar(dt.year, dt.month, dt.day)
         lunar = Converter.Solar2Lunar(solar)
-        # 农历正月初一(1) 到 十五(15)
+        # 农历正月(1月) 初一(1) 到 十五(15) 豁免
         is_lny_exempt = (lunar.month == 1 and 1 <= lunar.day <= 15)
         
-        # --- 规则 B: 每月敬礼 (使用繁体以匹配源数据风格) ---
+        # --- B. 每月敬礼 ---
+        # 使用繁体以保持一致性 (生成简体版时会自动转换)
         month_label = ""
         if dt.day == 1:
             if dt.month == 2: month_label = "聖神月"
@@ -222,15 +222,16 @@ def process_special_rules(raw_events):
         if month_label:
             events_list.append(month_label)
 
-        # --- 规则 C: 斋戒规则 ---
-        # 检查是否是特别日子 (同时支持简繁体关键词)
+        # --- C. 斋戒规则 ---
+        # 关键词匹配
         is_ash_wednesday = any(x in combined_text for x in ["聖灰禮儀", "圣灰礼仪"])
-        is_good_friday = any(x in combined_text for x in ["耶穌受難日", "耶稣受难日", "救主受難", "救主受难"])
-        is_friday = (dt.weekday() == 4) # 0=Mon, 4=Fri
+        is_good_friday = any(x in combined_text for x in ["耶穌受難日", "耶稣受难日", "救主受難"])
+        is_friday = (dt.weekday() == 4) # 星期五
 
         fasting_tag = ""
         
         # 优先级 1: 大小斋 (圣灰 or 受难)
+        # 注意：因为parse_html已经删除了"圣灰礼仪后..."，所以这里只会匹配真正的圣灰礼仪日
         if is_ash_wednesday or is_good_friday:
             if is_lny_exempt:
                 fasting_tag = "免大小齋"
@@ -246,10 +247,8 @@ def process_special_rules(raw_events):
         if fasting_tag:
             events_list.append(fasting_tag)
 
-    # 3. 重新打包为列表
-    final_events = []
-    for dt in sorted_dates:
-        full_summary = " | ".join(processed_map[dt])
+        # 重新打包
+        full_summary = " | ".join(events_list)
         final_events.append({'date': dt, 'summary': full_summary})
         
     return final_events
@@ -287,7 +286,7 @@ if __name__ == "__main__":
     ]
     
     all_raw_events = []
-    print("🚀 启动任务 (2026-2029) + 农历与斋戒规则...")
+    print("🚀 启动任务 (2026-2029) + 农历豁免 + 移除圣灰后...")
     
     for task in TASKS:
         if all_raw_events: time.sleep(random.randint(5, 8))
@@ -298,7 +297,6 @@ if __name__ == "__main__":
             print(f"⚠️ 跳过 {task['year']} 年")
 
     if all_raw_events:
-        # 在这里统一处理特殊规则 (合并、排序、添加标签)
         processed_events = process_special_rules(all_raw_events)
         
         print(f"\n📊 总计: {len(processed_events)} 天数据。正在生成...")
