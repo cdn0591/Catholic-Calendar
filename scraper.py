@@ -2,6 +2,7 @@ import cloudscraper
 from bs4 import BeautifulSoup
 from icalendar import Calendar, Event
 from datetime import datetime, timezone, timedelta
+from lunarcalendar import Converter, Solar
 import re
 import hashlib
 import time
@@ -41,16 +42,13 @@ def fetch_calendar_data(url):
     return None
 
 # ===========================
-# 2. 颜色识别逻辑 (升级版：支持多色 + 智能推断)
+# 2. 颜色识别逻辑
 # ===========================
 def get_liturgical_emoji(cell_soup, row_soup, text_content):
     text_content = text_content.strip()
     
-    # 0. 特殊节日强制硬编码 (最高优先级)
     if "追思已亡" in text_content: return "🟣⚫⚪ "
     
-    # 定义颜色规则列表
-    # 格式: (Emoji, [HTML特征词... , 中文文本关键词...])
     PATTERNS = [
         ("🔴 ", ["red", "day_r", "#ff0000", "#f00", "殉道", "圣枝", "聖枝", "圣神", "聖神", "受难", "受難"]),
         ("🟣 ", ["violet", "purple", "day_v", "day_p", "#800080", "四旬期", "将临期", "將臨期", "忏悔", "懺悔"]),
@@ -60,10 +58,8 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
         ("🟡 ", ["gold", "yellow", "day_y", "#ffd700"]),
     ]
     
-    # 弱规则：仅当未检测到任何颜色时，通过这些词推断为白色
     WEAK_WHITE_KEYWORDS = ["纪", "紀", "庆", "慶", "圣", "聖"]
 
-    # 1. 收集 HTML 属性
     check_pool = []
     for tag in [cell_soup] + list(cell_soup.find_all(True)):
         cls = " ".join(tag.get('class', [])).lower()
@@ -76,43 +72,35 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
         check_pool.append(f"{r_cls} {r_sty}")
 
     full_html_str = " | ".join(check_pool)
-
-    # 2. 匹配强规则 (HTML + 文本)
     found_emojis = []
 
-    # 策略 A: HTML 属性匹配
     for emoji, keywords in PATTERNS:
         for kw in keywords:
-            if not re.search(r'[\u4e00-\u9fff]', kw): # 只查英文代码
+            if not re.search(r'[\u4e00-\u9fff]', kw): 
                 if kw in full_html_str:
                     if emoji not in found_emojis: found_emojis.append(emoji)
                     break 
 
-    # 策略 B: 文本内容匹配 (补充HTML没写的情况)
-    # 只有当该颜色还没被 HTML 匹配到时才查文本
     for emoji, keywords in PATTERNS:
         if emoji in found_emojis: continue 
         for kw in keywords:
-            if re.search(r'[\u4e00-\u9fff]', kw): # 只查中文关键词
+            if re.search(r'[\u4e00-\u9fff]', kw):
                 if kw in text_content:
                     found_emojis.append(emoji)
                     break
 
-    # 3. 补漏逻辑 (弱规则)
-    # 如果此时没有任何颜色，且文本包含“圣/纪/庆”，则默认为白色
     if not found_emojis:
         for kw in WEAK_WHITE_KEYWORDS:
-            if kw in text_content:
-                return "⚪ " # 直接返回，不再拼接
+            if kw in text_content: return "⚪ "
     
     return "".join(found_emojis)
 
 # ===========================
-# 3. HTML 解析逻辑 (保持紧凑排版)
+# 3. HTML 解析逻辑
 # ===========================
 def parse_html(html_content, target_year):
     soup = BeautifulSoup(html_content, 'html.parser')
-    events_map = {}
+    local_events = [] # 暂存每一行的原始数据 (date, text)
     rows = soup.find_all('tr')
     
     if len(rows) < 10:
@@ -134,7 +122,6 @@ def parse_html(html_content, target_year):
     for row in rows:
         row_text = row.get_text(strip=True)
         
-        # 日期定位
         day_num = None
         date_match = re.search(r'(\d{1,2})\s*[月/]\s*(\d{1,2})', row_text)
         if date_match:
@@ -158,7 +145,6 @@ def parse_html(html_content, target_year):
             if row_text in month_names or "月" in row_text and len(row_text) < 4: continue
             if "星期" in row_text and "日期" in row_text: continue
 
-        # 提取内容
         for cell in row.find_all(['td', 'th']):
             cell_text = cell.get_text(strip=True, separator=' ')
             
@@ -168,11 +154,9 @@ def parse_html(html_content, target_year):
             if cell_text.replace('*', '').strip() in ['自', 'O', 'M']: continue
             if len(cell_text) < 2 and not re.search(r'[\u4e00-\u9fff]', cell_text): continue
 
-            # 基础清洗
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
             
-            # 标点紧凑化
             clean_text = clean_text.replace('（', '(').replace('）', ')')
             for char in ['、', '，', '。', '．', '・', '‧', '･']:
                 clean_text = clean_text.replace(char, '.')
@@ -183,28 +167,95 @@ def parse_html(html_content, target_year):
             clean_text = re.sub(r'\s*\)\s*', ')', clean_text)
 
             if len(clean_text) > 1:
-                # 获取颜色
                 emoji_prefix = get_liturgical_emoji(cell, row, clean_text)
-                
                 try:
                     dt = datetime(target_year, current_month, current_day)
-                    if dt not in events_map: events_map[dt] = []
-                    
                     final_text = f"{emoji_prefix}{clean_text}"
-                    if final_text not in events_map[dt]:
-                        events_map[dt].append(final_text)
+                    local_events.append({'date': dt, 'summary': final_text})
                 except ValueError: continue
 
-    sorted_events = []
-    for dt in sorted(events_map.keys()):
-        full_summary = " | ".join(events_map[dt])
-        sorted_events.append({'date': dt, 'summary': full_summary})
-
-    print(f"✅ [{target_year}] 解析成功: {len(sorted_events)} 条数据")
-    return sorted_events
+    print(f"✅ [{target_year}] 初步解析: {len(local_events)} 条记录")
+    return local_events
 
 # ===========================
-# 4. 生成模块
+# 4. 规则后处理 (新增: 斋戒与特定月份)
+# ===========================
+def process_special_rules(raw_events):
+    """
+    处理特殊规则：
+    1. 特定月份首日添加 "XX月"
+    2. 星期五添加 "小斋"
+    3. 圣灰/受难日添加 "大小斋"
+    4. 农历新年豁免 (免小斋/免大小斋)
+    """
+    processed_map = {}
+    
+    # 1. 先把数据按日期归档
+    for e in raw_events:
+        dt = e['date']
+        if dt not in processed_map: processed_map[dt] = []
+        if e['summary'] not in processed_map[dt]:
+            processed_map[dt].append(e['summary'])
+
+    # 2. 遍历每一天应用规则
+    sorted_dates = sorted(processed_map.keys())
+    for dt in sorted_dates:
+        events_list = processed_map[dt]
+        combined_text = " ".join(events_list) # 用于检查关键词
+        
+        # --- 规则 A: 农历新年检查 ---
+        solar = Solar(dt.year, dt.month, dt.day)
+        lunar = Converter.Solar2Lunar(solar)
+        # 农历正月初一(1) 到 十五(15)
+        is_lny_exempt = (lunar.month == 1 and 1 <= lunar.day <= 15)
+        
+        # --- 规则 B: 每月敬礼 (使用繁体以匹配源数据风格) ---
+        month_label = ""
+        if dt.day == 1:
+            if dt.month == 2: month_label = "聖神月"
+            elif dt.month == 3: month_label = "聖若瑟月"
+            elif dt.month == 5: month_label = "聖母月"
+            elif dt.month == 6: month_label = "聖心月"
+            elif dt.month == 10: month_label = "玫瑰月"
+            elif dt.month == 11: month_label = "煉靈月"
+        
+        if month_label:
+            events_list.append(month_label)
+
+        # --- 规则 C: 斋戒规则 ---
+        # 检查是否是特别日子 (同时支持简繁体关键词)
+        is_ash_wednesday = any(x in combined_text for x in ["聖灰禮儀", "圣灰礼仪"])
+        is_good_friday = any(x in combined_text for x in ["耶穌受難日", "耶稣受难日", "救主受難", "救主受难"])
+        is_friday = (dt.weekday() == 4) # 0=Mon, 4=Fri
+
+        fasting_tag = ""
+        
+        # 优先级 1: 大小斋 (圣灰 or 受难)
+        if is_ash_wednesday or is_good_friday:
+            if is_lny_exempt:
+                fasting_tag = "免大小齋"
+            else:
+                fasting_tag = "大小齋"
+        # 优先级 2: 小斋 (星期五)
+        elif is_friday:
+            if is_lny_exempt:
+                fasting_tag = "免小齋"
+            else:
+                fasting_tag = "小齋"
+        
+        if fasting_tag:
+            events_list.append(fasting_tag)
+
+    # 3. 重新打包为列表
+    final_events = []
+    for dt in sorted_dates:
+        full_summary = " | ".join(processed_map[dt])
+        final_events.append({'date': dt, 'summary': full_summary})
+        
+    return final_events
+
+# ===========================
+# 5. 生成模块
 # ===========================
 def generate_ics(events, output_file, calendar_name, convert_to_simplified=False):
     cal = Calendar()
@@ -235,21 +286,26 @@ if __name__ == "__main__":
         { "year": 2029, "url": "https://gcatholic.org/calendar/2029/General-D-zt" }
     ]
     
-    master_events = []
-    print("🚀 启动任务 (2026-2029) + 智能颜色 + 紧凑排版...")
+    all_raw_events = []
+    print("🚀 启动任务 (2026-2029) + 农历与斋戒规则...")
     
     for task in TASKS:
-        if master_events: time.sleep(random.randint(5, 8))
+        if all_raw_events: time.sleep(random.randint(5, 8))
         html = fetch_calendar_data(task['url'])
         if html:
-            master_events.extend(parse_html(html, task['year']))
+            all_raw_events.extend(parse_html(html, task['year']))
         else:
             print(f"⚠️ 跳过 {task['year']} 年")
 
-    if master_events:
-        master_events.sort(key=lambda x: x['date'])
-        print(f"\n📊 总计: {len(master_events)} 条数据。正在生成...")
-        generate_ics(master_events, "catholic_calendar_2026-2029.ics", "天主教礼仪日历 2026-2029")
+    if all_raw_events:
+        # 在这里统一处理特殊规则 (合并、排序、添加标签)
+        processed_events = process_special_rules(all_raw_events)
+        
+        print(f"\n📊 总计: {len(processed_events)} 天数据。正在生成...")
+        generate_ics(processed_events, "catholic_calendar_2026-2029.ics", "天主教礼仪日历 2026-2029")
         if zhconv:
-            generate_ics(master_events, "catholic_calendar_2026-2029_cn.ics", "天主教礼仪日历 2026-2029 (简)", True)
+            generate_ics(processed_events, "catholic_calendar_2026-2029_cn.ics", "天主教礼仪日历 2026-2029 (简)", True)
         print("🎉 完成！")
+    else:
+        print("❌ 失败：无数据。")
+        sys.exit(1)
