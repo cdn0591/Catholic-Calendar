@@ -41,21 +41,27 @@ def fetch_calendar_data(url):
     return None
 
 # ===========================
-# 2. 颜色识别逻辑 (升级版：支持多色 + 关键词补全)
+# 2. 颜色识别逻辑 (升级版：支持多色 + 智能推断)
 # ===========================
 def get_liturgical_emoji(cell_soup, row_soup, text_content):
     text_content = text_content.strip()
     
-    # 定义颜色规则列表 (使用列表元组以保持顺序)
+    # 0. 特殊节日强制硬编码 (最高优先级)
+    if "追思已亡" in text_content: return "🟣⚫⚪ "
+    
+    # 定义颜色规则列表
     # 格式: (Emoji, [HTML特征词... , 中文文本关键词...])
     PATTERNS = [
         ("🔴 ", ["red", "day_r", "#ff0000", "#f00", "殉道", "圣枝", "聖枝", "圣神", "聖神", "受难", "受難"]),
-        ("🟣 ", ["violet", "purple", "day_v", "day_p", "#800080", "四旬期", "将临期", "將臨期", "忏悔", "懺悔", "追思", "已亡", "炼灵"]),
+        ("🟣 ", ["violet", "purple", "day_v", "day_p", "#800080", "四旬期", "将临期", "將臨期", "忏悔", "懺悔"]),
         ("🟢 ", ["green", "day_g", "#008000", "#00ff00", "常年期"]),
+        ("⚫ ", ["black", "day_b", "#000000", "#000"]),
         ("⚪ ", ["white", "day_w", "#ffffff", "#fff", "圣诞", "聖誕", "复活", "復活", "圣母", "聖母", "白", "诸圣", "諸聖", "献主", "獻主", "耶稣升天"]),
         ("🟡 ", ["gold", "yellow", "day_y", "#ffd700"]),
-        ("⚫ ", ["black", "day_b", "#000000", "#000"]), # 新增黑色 (用于追思已亡)
     ]
+    
+    # 弱规则：仅当未检测到任何颜色时，通过这些词推断为白色
+    WEAK_WHITE_KEYWORDS = ["纪", "紀", "庆", "慶", "圣", "聖"]
 
     # 1. 收集 HTML 属性
     check_pool = []
@@ -71,31 +77,34 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
 
     full_html_str = " | ".join(check_pool)
 
-    # 2. 匹配逻辑 (收集所有匹配到的颜色)
+    # 2. 匹配强规则 (HTML + 文本)
     found_emojis = []
 
     # 策略 A: HTML 属性匹配
     for emoji, keywords in PATTERNS:
         for kw in keywords:
-            # 只匹配英文/代码 (过滤掉中文关键词)
-            if not re.search(r'[\u4e00-\u9fff]', kw): 
+            if not re.search(r'[\u4e00-\u9fff]', kw): # 只查英文代码
                 if kw in full_html_str:
-                    if emoji not in found_emojis:
-                        found_emojis.append(emoji)
-                    break # 该颜色已找到，跳到下一个颜色规则
+                    if emoji not in found_emojis: found_emojis.append(emoji)
+                    break 
 
-    # 策略 B: 文本内容强制匹配 (如果HTML没找到，或为了补全漏掉的)
+    # 策略 B: 文本内容匹配 (补充HTML没写的情况)
+    # 只有当该颜色还没被 HTML 匹配到时才查文本
+    for emoji, keywords in PATTERNS:
+        if emoji in found_emojis: continue 
+        for kw in keywords:
+            if re.search(r'[\u4e00-\u9fff]', kw): # 只查中文关键词
+                if kw in text_content:
+                    found_emojis.append(emoji)
+                    break
+
+    # 3. 补漏逻辑 (弱规则)
+    # 如果此时没有任何颜色，且文本包含“圣/纪/庆”，则默认为白色
     if not found_emojis:
-        for emoji, keywords in PATTERNS:
-            for kw in keywords:
-                # 只匹配中文关键词
-                if re.search(r'[\u4e00-\u9fff]', kw):
-                    if kw in text_content:
-                        if emoji not in found_emojis:
-                            found_emojis.append(emoji)
-                        break
-
-    # 3. 返回拼接后的 Emoji 字符串 (例如 "🟣⚫⚪ ")
+        for kw in WEAK_WHITE_KEYWORDS:
+            if kw in text_content:
+                return "⚪ " # 直接返回，不再拼接
+    
     return "".join(found_emojis)
 
 # ===========================
@@ -227,7 +236,7 @@ if __name__ == "__main__":
     ]
     
     master_events = []
-    print("🚀 启动任务 (2026-2029) + 多色识别 + 紧凑排版...")
+    print("🚀 启动任务 (2026-2029) + 智能颜色 + 紧凑排版...")
     
     for task in TASKS:
         if master_events: time.sleep(random.randint(5, 8))
