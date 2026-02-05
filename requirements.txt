@@ -3,3 +3,4 @@ beautifulsoup4==4.12.2
 icalendar==5.0.11
 zhconv==1.4.3
 cloudscraper==1.2.71
+lunarcalendar==0.0.9
