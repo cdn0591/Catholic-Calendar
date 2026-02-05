@@ -12,69 +12,114 @@ try:
 except ImportError:
     zhconv = None
 
+# ===========================
+# 1. 增强型网络请求模块
+# ===========================
 def fetch_calendar_data(url):
+    # 使用 Session 可以在多次重试中保持 Cookies，有助于绕过简单的 Cloudflare 检查
+    session = requests.Session()
+    
     user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
     ]
     
-    for attempt in range(3):
+    max_retries = 5
+    
+    for attempt in range(max_retries):
         try:
-            print(f"🔄 尝试连接 (第 {attempt + 1}/3 次): {url} ...")
+            print(f"🔄 [尝试 {attempt + 1}/{max_retries}] 连接: {url} ...")
             headers = {
-                'User-Agent': user_agents[attempt % len(user_agents)],
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent': random.choice(user_agents),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Referer': 'https://www.google.com/'
+                'Referer': 'https://www.google.com/',
+                'Cache-Control': 'max-age=0',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"'
             }
             
-            response = requests.get(url, headers=headers, timeout=30)
+            response = session.get(url, headers=headers, timeout=45)
             response.encoding = 'utf-8'
             
-            if response.status_code == 200:
-                return response.text
+            # --- 关键校验步骤 ---
+            # 1. 获取网页标题进行诊断
+            page_title = "未知标题"
+            try:
+                soup_check = BeautifulSoup(response.text[:5000], 'html.parser')
+                if soup_check.title:
+                    page_title = soup_check.title.string.strip()
+            except: pass
+            
+            print(f"   📄 状态码: {response.status_code} | 标题: {page_title}")
+
+            # 2. 检查是否为有效日历页面
+            # 有效页面通常包含 "Diocese" 字样或大量的 "tr" 标签，或者 table
+            is_blocked = False
+            if "Just a moment" in page_title or "Security" in page_title or "Cloudflare" in page_title:
+                is_blocked = True
+            
+            if response.status_code == 200 and not is_blocked:
+                # 进一步检查内容长度，防止空白页
+                if len(response.text) > 1000:
+                    return response.text
+                else:
+                    print("   ⚠️ 警告: 页面内容过短，可能加载失败。")
+            else:
+                print("   ⚠️ 警告: 检测到拦截页面，准备重试...")
+
+            # 失败后等待
+            wait_time = 5 + (attempt * 3) + random.random() * 5 # 递增等待 5s, 8s, 11s...
+            print(f"   ⏳ 等待 {wait_time:.1f} 秒后重试...")
+            time.sleep(wait_time)
                 
         except Exception as e:
             print(f"❌ 请求异常: {e}")
             time.sleep(5)
             
+    print("❌ 所有重试均失败，放弃此链接。")
     return None
 
+# ===========================
+# 2. 颜色识别与 Emoji
+# ===========================
 def get_liturgical_emoji(cell_soup):
     """
     扫描单元格内部标签的 class 和 style 属性，
     判断礼仪颜色并返回对应的 Emoji。
     """
-    # 遍历单元格内所有子标签
     for tag in cell_soup.find_all(True):
-        # 获取 class 列表 (转为字符串)
         classes = " ".join(tag.get('class', [])).lower()
-        # 获取 style 属性
         style = str(tag.get('style', '')).lower()
-        
-        # 拼接检查字符串
         check_str = f"{classes} {style}"
         
-        # 颜色判断逻辑 (优先级：绿 > 紫 > 红 > 白)
-        if 'green' in check_str:
-            return "🟢 "
-        elif 'violet' in check_str or 'purple' in check_str:
-            return "🟣 "
-        elif 'red' in check_str:
-            return "🔴 "
-        elif 'white' in check_str:
-            return "⚪ "
-        elif 'gold' in check_str or 'yellow' in check_str:
-            return "🟡 "
+        if 'green' in check_str: return "🟢 "
+        elif 'violet' in check_str or 'purple' in check_str: return "🟣 "
+        elif 'red' in check_str: return "🔴 "
+        elif 'white' in check_str: return "⚪ "
+        elif 'gold' in check_str or 'yellow' in check_str: return "🟡 "
             
     return ""
 
+# ===========================
+# 3. HTML 解析逻辑
+# ===========================
 def parse_html(html_content, target_year):
     soup = BeautifulSoup(html_content, 'html.parser')
-    
     events_map = {}
     
     rows = soup.find_all('tr')
+    
+    # === 如果这里是 0，说明 fetch 到的页面不对 ===
+    if len(rows) == 0:
+        print(f"❌ [{target_year}] 严重错误: 页面源代码中未发现表格行 (tr)。")
+        # 尝试打印部分源码以供调试 (可选)
+        # print(html_content[:500])
+        return []
+
     print(f"🔍 [{target_year}] 扫描到 {len(rows)} 个表格行，开始解析...")
 
     current_month = 1
@@ -92,7 +137,7 @@ def parse_html(html_content, target_year):
     for row in rows:
         row_text = row.get_text(strip=True)
         
-        # --- 1. 日期定位 ---
+        # --- 日期定位 ---
         day_num = None
         date_match = re.search(r'(\d{1,2})\s*[月/]\s*(\d{1,2})', row_text)
         if date_match:
@@ -125,13 +170,12 @@ def parse_html(html_content, target_year):
             if "星期" in row_text and "日期" in row_text: continue
             pass
 
-        # --- 2. 提取内容 ---
+        # --- 提取内容 ---
         cells = row.find_all(['td', 'th'])
         
         for cell in cells:
             cell_text = cell.get_text(strip=True, separator=' ')
             
-            # 基础过滤
             if re.match(r'^[\d\s/-]+$', cell_text) or re.match(r'^\d+月\d+日$', cell_text): continue
             if cell_text in month_names: continue
             if cell_text in exclude_exact_match: continue
@@ -139,10 +183,10 @@ def parse_html(html_content, target_year):
             if cell_text.replace('*', '').strip() in ['自', 'O', 'M']: continue
             if len(cell_text) < 2 and not re.search(r'[\u4e00-\u9fff]', cell_text): continue
 
-            # === 核心修改：获取颜色 Emoji ===
+            # 获取颜色
             emoji_prefix = get_liturgical_emoji(cell)
 
-            # 文本清洗
+            # 清洗
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
             clean_text = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', clean_text)
@@ -153,11 +197,7 @@ def parse_html(html_content, target_year):
                     if dt not in events_map:
                         events_map[dt] = []
                     
-                    # 组合 Emoji 和 文本
                     final_text = f"{emoji_prefix}{clean_text}"
-                    
-                    # 去重检查 (只检查文本部分，忽略 emoji 差异，防止同一节日因颜色判定不同重复)
-                    # 但为了简单，直接检查完整字符串
                     if final_text not in events_map[dt]:
                         events_map[dt].append(final_text)
                 except ValueError:
@@ -171,6 +211,9 @@ def parse_html(html_content, target_year):
     print(f"✅ [{target_year}] 解析完成，共提取 {len(sorted_events)} 天的数据")
     return sorted_events
 
+# ===========================
+# 4. 生成 ICS 文件
+# ===========================
 def generate_ics(events, output_file, calendar_name, year, convert_to_simplified=False):
     cal = Calendar()
     cal.add('prodid', '-//GCatholic HK//mxm.io//')
@@ -180,7 +223,7 @@ def generate_ics(events, output_file, calendar_name, year, convert_to_simplified
     
     if not events:
         event = Event()
-        event.add('summary', '暂无数据')
+        event.add('summary', '暂无数据 - 抓取失败')
         event.add('dtstart', datetime(year, 1, 1).date())
         cal.add_component(event)
     else:
@@ -189,7 +232,6 @@ def generate_ics(events, output_file, calendar_name, year, convert_to_simplified
             
             summary_text = e['summary']
             if convert_to_simplified and zhconv:
-                # 繁简转换时，emoji 不会被影响，因为它们不是中文字符
                 summary_text = zhconv.convert(summary_text, 'zh-cn')
                 
             uid = hashlib.md5(f"{e['date']}{summary_text}".encode()).hexdigest() + "@gcatholic"
@@ -214,12 +256,22 @@ if __name__ == "__main__":
     master_events = []
 
     print("🚀 启动批量抓取任务 (2026-2029) + 颜色识别...")
+    print("ℹ️ 提示: 如果日志显示 '标题: Just a moment...'，说明正在重试绕过反爬虫。")
     
     for task in TASKS:
+        # 在任务之间添加随机延迟，减少连续请求被封的概率
+        if master_events: 
+            sleep_time = random.randint(3, 8)
+            print(f"😴 休息 {sleep_time} 秒...")
+            time.sleep(sleep_time)
+
         html = fetch_calendar_data(task['url'])
         if html:
             extracted_events = parse_html(html, task['year'])
-            master_events.extend(extracted_events)
+            if extracted_events:
+                master_events.extend(extracted_events)
+            else:
+                print(f"⚠️ 警告: {task['year']} 年虽然连接成功但未提取到数据。")
         else:
             print(f"❌ 严重错误: 无法获取 {task['year']} 年数据，该年份将被跳过。")
 
