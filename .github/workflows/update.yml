@@ -24,7 +24,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # 安装 requirements.txt 中列出的所有库 (含 cloudscraper, zhconv 等)
+        # 这一步会读取仓库里的 requirements.txt 文件
+        # 如果仓库里没有这个文件，就会报错 "No such file"
         pip install -r requirements.txt
 
     - name: Run scraper
