@@ -50,7 +50,6 @@ def parse_html(html_content, target_year):
 
     current_month = 1
     current_day = 0
-    # 使用传入的目标年份
     year = target_year
     
     exclude_keywords_partial = ['日期']
@@ -113,7 +112,6 @@ def parse_html(html_content, target_year):
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
             
-            # 修复中文中间的空格
             clean_text = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', clean_text)
 
             if len(clean_text) > 1:
@@ -145,7 +143,6 @@ def generate_ics(events, output_file, calendar_name, year, convert_to_simplified
     if not events:
         event = Event()
         event.add('summary', '暂无数据')
-        # 使用动态年份
         event.add('dtstart', datetime(year, 1, 1).date())
         cal.add_component(event)
     else:
@@ -168,63 +165,42 @@ def generate_ics(events, output_file, calendar_name, year, convert_to_simplified
         f.write(cal.to_ical())
 
 if __name__ == "__main__":
-    # 定义任务列表
-    # HK-zt: 香港教区日历
-    # General-D-zt: 通用日历 (繁体)
     TASKS = [
-        {
-            "year": 2026,
-            "url": "https://gcatholic.org/calendar/2026/HK-zt",
-            "file_base": "catholic_hk_2026",
-            "name": "天主教香港教区礼仪日历 2026"
-        },
-        {
-            "year": 2027,
-            "url": "https://gcatholic.org/calendar/2027/General-D-zt",
-            "file_base": "catholic_general_2027",
-            "name": "天主教通用礼仪日历 2027"
-        },
-        {
-            "year": 2028,
-            "url": "https://gcatholic.org/calendar/2028/General-D-zt",
-            "file_base": "catholic_general_2028",
-            "name": "天主教通用礼仪日历 2028"
-        },
-        {
-            "year": 2029,
-            "url": "https://gcatholic.org/calendar/2029/General-D-zt",
-            "file_base": "catholic_general_2029",
-            "name": "天主教通用礼仪日历 2029"
-        }
+        { "year": 2026, "url": "https://gcatholic.org/calendar/2026/HK-zt" },
+        { "year": 2027, "url": "https://gcatholic.org/calendar/2027/General-D-zt" },
+        { "year": 2028, "url": "https://gcatholic.org/calendar/2028/General-D-zt" },
+        { "year": 2029, "url": "https://gcatholic.org/calendar/2029/General-D-zt" }
     ]
     
+    # 用于存储所有年份的总数据
+    master_events = []
+
+    print("🚀 启动批量抓取任务 (2026-2029)...")
+    
     for task in TASKS:
-        print(f"\n🚀 开始处理 {task['year']} 年任务...")
         html = fetch_calendar_data(task['url'])
-        
         if html:
             extracted_events = parse_html(html, task['year'])
-            
-            # 1. 生成繁体版
-            file_trad = f"{task['file_base']}.ics"
-            print(f"✍️ 正在生成繁体版: {file_trad}")
-            generate_ics(extracted_events, file_trad, task['name'], task['year'])
-            
-            # 2. 生成简体版
-            if zhconv:
-                file_simp = f"{task['file_base'].replace('_hk', '_cn').replace('_general', '_general_cn')}.ics"
-                # 如果文件名没有 hk/general 标识，直接加 _cn 后缀
-                if file_simp == file_trad: 
-                    file_simp = f"{task['file_base']}_cn.ics"
-                    
-                print(f"✍️ 正在生成简体版: {file_simp}")
-                name_simp = task['name'].replace('香港教区', '').replace('通用', '') + " (简)"
-                if "香港" in task['name']: name_simp = "天主教礼仪日历 (简) " + str(task['year'])
-                
-                generate_ics(extracted_events, file_simp, name_simp, task['year'], convert_to_simplified=True)
-            else:
-                print("⚠️ zhconv 未安装，跳过简体版生成")
+            master_events.extend(extracted_events) # 将数据加入总表
         else:
-            print(f"❌ 无法获取 {task['year']} 年网页")
-            
-    print("\n🎉 所有年份任务完成！")
+            print(f"❌ 严重错误: 无法获取 {task['year']} 年数据，该年份将被跳过。")
+
+    # 按时间排序确保顺序正确
+    master_events.sort(key=lambda x: x['date'])
+    
+    print(f"\n📊 统计: 4年共收集到 {len(master_events)} 条数据，准备生成合并文件...")
+
+    # 1. 生成合并繁体版
+    FILE_TRAD = "catholic_calendar_2026-2029.ics"
+    print(f"✍️ 生成合并繁体版: {FILE_TRAD}")
+    generate_ics(master_events, FILE_TRAD, "天主教礼仪日历 2026-2029", 2026)
+    
+    # 2. 生成合并简体版
+    if zhconv:
+        FILE_SIMP = "catholic_calendar_2026-2029_cn.ics"
+        print(f"✍️ 生成合并简体版: {FILE_SIMP}")
+        generate_ics(master_events, FILE_SIMP, "天主教礼仪日历 2026-2029 (简)", 2026, convert_to_simplified=True)
+    else:
+        print("⚠️ zhconv 未安装，跳过简体版生成")
+        
+    print("🎉 任务全部完成！")
