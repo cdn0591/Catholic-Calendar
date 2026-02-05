@@ -41,30 +41,24 @@ def fetch_calendar_data(url):
     return None
 
 # ===========================
-# 2. 颜色识别逻辑 (核心修复：增加繁体匹配)
+# 2. 颜色识别逻辑 (升级版：支持多色 + 关键词补全)
 # ===========================
 def get_liturgical_emoji(cell_soup, row_soup, text_content):
     text_content = text_content.strip()
     
-    # 颜色特征库 (同时包含简体和繁体关键词)
-    PATTERNS = {
-        "🔴 ": ["red", "day_r", "#ff0000", "#f00", 
-               "殉道", "圣枝", "聖枝", "圣神", "聖神", "受难", "受難"],
-               
-        "🟣 ": ["violet", "purple", "day_v", "day_p", "#800080", 
-               "四旬期", "将临期", "將臨期", "忏悔", "懺悔"],
-               
-        "🟢 ": ["green", "day_g", "#008000", "#00ff00", 
-               "常年期"],
-               
-        "⚪ ": ["white", "day_w", "#ffffff", "#fff", 
-               "圣诞", "聖誕", "复活", "復活", "圣母", "聖母", "白"],
-               
-        "🟡 ": ["gold", "yellow", "day_y", "#ffd700"],
-    }
+    # 定义颜色规则列表 (使用列表元组以保持顺序)
+    # 格式: (Emoji, [HTML特征词... , 中文文本关键词...])
+    PATTERNS = [
+        ("🔴 ", ["red", "day_r", "#ff0000", "#f00", "殉道", "圣枝", "聖枝", "圣神", "聖神", "受难", "受難"]),
+        ("🟣 ", ["violet", "purple", "day_v", "day_p", "#800080", "四旬期", "将临期", "將臨期", "忏悔", "懺悔", "追思", "已亡", "炼灵"]),
+        ("🟢 ", ["green", "day_g", "#008000", "#00ff00", "常年期"]),
+        ("⚪ ", ["white", "day_w", "#ffffff", "#fff", "圣诞", "聖誕", "复活", "復活", "圣母", "聖母", "白", "诸圣", "諸聖", "献主", "獻主", "耶稣升天"]),
+        ("🟡 ", ["gold", "yellow", "day_y", "#ffd700"]),
+        ("⚫ ", ["black", "day_b", "#000000", "#000"]), # 新增黑色 (用于追思已亡)
+    ]
 
+    # 1. 收集 HTML 属性
     check_pool = []
-    
     for tag in [cell_soup] + list(cell_soup.find_all(True)):
         cls = " ".join(tag.get('class', [])).lower()
         sty = str(tag.get('style', '')).lower()
@@ -77,21 +71,35 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
 
     full_html_str = " | ".join(check_pool)
 
-    # 策略 A: HTML 属性匹配
-    for emoji, keywords in PATTERNS.items():
-        for kw in keywords:
-            if not re.search(r'[\u4e00-\u9fff]', kw): 
-                if kw in full_html_str: return emoji
+    # 2. 匹配逻辑 (收集所有匹配到的颜色)
+    found_emojis = []
 
-    # 策略 B: 文本内容强制匹配 (已增强繁体支持)
-    for emoji, keywords in PATTERNS.items():
+    # 策略 A: HTML 属性匹配
+    for emoji, keywords in PATTERNS:
         for kw in keywords:
-            if kw in text_content: return emoji
-            
-    return ""
+            # 只匹配英文/代码 (过滤掉中文关键词)
+            if not re.search(r'[\u4e00-\u9fff]', kw): 
+                if kw in full_html_str:
+                    if emoji not in found_emojis:
+                        found_emojis.append(emoji)
+                    break # 该颜色已找到，跳到下一个颜色规则
+
+    # 策略 B: 文本内容强制匹配 (如果HTML没找到，或为了补全漏掉的)
+    if not found_emojis:
+        for emoji, keywords in PATTERNS:
+            for kw in keywords:
+                # 只匹配中文关键词
+                if re.search(r'[\u4e00-\u9fff]', kw):
+                    if kw in text_content:
+                        if emoji not in found_emojis:
+                            found_emojis.append(emoji)
+                        break
+
+    # 3. 返回拼接后的 Emoji 字符串 (例如 "🟣⚫⚪ ")
+    return "".join(found_emojis)
 
 # ===========================
-# 3. HTML 解析逻辑
+# 3. HTML 解析逻辑 (保持紧凑排版)
 # ===========================
 def parse_html(html_content, target_year):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -155,7 +163,7 @@ def parse_html(html_content, target_year):
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
             
-            # --- 标点符号紧凑化 ---
+            # 标点紧凑化
             clean_text = clean_text.replace('（', '(').replace('）', ')')
             for char in ['、', '，', '。', '．', '・', '‧', '･']:
                 clean_text = clean_text.replace(char, '.')
@@ -164,7 +172,6 @@ def parse_html(html_content, target_year):
             clean_text = re.sub(r'\s*\.\s*', '.', clean_text)
             clean_text = re.sub(r'\s*\(\s*', '(', clean_text)
             clean_text = re.sub(r'\s*\)\s*', ')', clean_text)
-            # ---------------------
 
             if len(clean_text) > 1:
                 # 获取颜色
@@ -220,7 +227,7 @@ if __name__ == "__main__":
     ]
     
     master_events = []
-    print("🚀 启动任务 (2026-2029) + 繁体颜色匹配 + 紧凑排版...")
+    print("🚀 启动任务 (2026-2029) + 多色识别 + 紧凑排版...")
     
     for task in TASKS:
         if master_events: time.sleep(random.randint(5, 8))
