@@ -42,13 +42,22 @@ def fetch_calendar_data(url):
     return None
 
 # ===========================
-# 2. 颜色识别逻辑
+# 2. 颜色识别逻辑 (核心修改)
 # ===========================
 def get_liturgical_emoji(cell_soup, row_soup, text_content):
     text_content = text_content.strip()
     
+    # 0. 特殊节日强制硬编码 (最高优先级)
     if "追思已亡" in text_content: return "🟣⚫⚪ "
     
+    # === 新增规则：检测 "節" (Rank) -> 强制黄色 ===
+    if row_soup:
+        for c in row_soup.find_all(['td', 'th']):
+            # 查找内容为 "節" 的单元格
+            if c.get_text(strip=True) == '節':
+                return "🟡 " # 强制返回黄色，忽略后续颜色判断
+    
+    # --- 常规颜色判断 ---
     PATTERNS = [
         ("🔴 ", ["red", "day_r", "#ff0000", "#f00", "殉道", "圣枝", "聖枝", "圣神", "聖神", "受难", "受難"]),
         ("🟣 ", ["violet", "purple", "day_v", "day_p", "#800080", "四旬期", "将临期", "將臨期", "忏悔", "懺悔"]),
@@ -74,6 +83,7 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
     full_html_str = " | ".join(check_pool)
     found_emojis = []
 
+    # 策略 A: HTML 属性匹配
     for emoji, keywords in PATTERNS:
         for kw in keywords:
             if not re.search(r'[\u4e00-\u9fff]', kw): 
@@ -81,6 +91,7 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
                     if emoji not in found_emojis: found_emojis.append(emoji)
                     break 
 
+    # 策略 B: 文本关键词匹配
     for emoji, keywords in PATTERNS:
         if emoji in found_emojis: continue 
         for kw in keywords:
@@ -89,6 +100,7 @@ def get_liturgical_emoji(cell_soup, row_soup, text_content):
                     found_emojis.append(emoji)
                     break
 
+    # 策略 C: 补漏规则 (白色)
     if not found_emojis:
         for kw in WEAK_WHITE_KEYWORDS:
             if kw in text_content: return "⚪ "
@@ -157,6 +169,7 @@ def parse_html(html_content, target_year):
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
             
+            # 标点紧凑化
             clean_text = clean_text.replace('（', '(').replace('）', ')')
             for char in ['、', '，', '。', '．', '・', '‧', '･']:
                 clean_text = clean_text.replace(char, '.')
@@ -165,8 +178,9 @@ def parse_html(html_content, target_year):
             clean_text = re.sub(r'\s*\(\s*', '(', clean_text)
             clean_text = re.sub(r'\s*\)\s*', ')', clean_text)
 
-            if '灰禮儀後' in clean_text or '灰礼仪后' in clean_text:
-                continue
+            # === 过滤规则：移除 "圣灰礼仪后" 和 "主显节后" ===
+            if '灰禮儀後' in clean_text or '灰礼仪后' in clean_text: continue
+            if '主顯節後' in clean_text or '主显节后' in clean_text: continue
 
             if len(clean_text) > 1:
                 emoji_prefix = get_liturgical_emoji(cell, row, clean_text)
@@ -198,21 +212,18 @@ def process_special_rules(raw_events):
         events_list = processed_map[dt]
         combined_text = " ".join(events_list) 
         
-        # --- A. 农历计算 (豁免检查 1) ---
+        # A. 农历豁免
         solar = Solar(dt.year, dt.month, dt.day)
         lunar = Converter.Solar2Lunar(solar)
         is_lny_exempt = (lunar.month == 1 and 1 <= lunar.day <= 15)
         
-        # --- B. 节日豁免 (豁免检查 2) ---
-        # 关键词匹配 (使用繁体匹配)
-        # 复活期, 耶稣圣心, 耶稣圣诞, 圣母蒙召升天, 五旬节
+        # B. 节日豁免
         exempt_keywords = ["復活期", "耶穌聖心", "耶穌聖誕", "聖母蒙召升天", "五旬節"]
         is_feast_exempt = any(kw in combined_text for kw in exempt_keywords)
         
-        # 综合豁免条件
         is_exempt = is_lny_exempt or is_feast_exempt
 
-        # --- C. 每月敬礼 ---
+        # C. 每月敬礼
         month_label = ""
         if dt.day == 1:
             if dt.month == 2: month_label = "聖神月"
@@ -223,41 +234,23 @@ def process_special_rules(raw_events):
             elif dt.month == 11: month_label = "煉靈月"
         if month_label: events_list.append(month_label)
 
-        # --- D. 周期性标记 (首六/首七/罢工) ---
-        weekday = dt.weekday() # 0=Mon, 4=Fri, 5=Sat, 6=Sun
+        # D. 周期性标记
+        weekday = dt.weekday()
         day = dt.day
-        
-        # 首六 (每月第一个星期五)
-        if weekday == 4 and day <= 7:
-            events_list.append("首六")
-            
-        # 首七 (每月第一个星期六)
-        if weekday == 5 and day <= 7:
-            events_list.append("首七")
-            
-        # 罢工 (所有星期日)
-        if weekday == 6:
-            events_list.append("罷工")
+        if weekday == 4 and day <= 7: events_list.append("首六")
+        if weekday == 5 and day <= 7: events_list.append("首七")
+        if weekday == 6: events_list.append("罷工")
 
-        # --- E. 斋戒规则 ---
+        # E. 斋戒规则
         is_ash_wednesday = any(x in combined_text for x in ["聖灰禮儀", "圣灰礼仪"])
         is_good_friday = any(x in combined_text for x in ["耶穌受難日", "耶稣受难日", "救主受難"])
         is_friday = (weekday == 4) 
 
         fasting_tag = ""
-        
-        # 优先级 1: 大小斋
         if is_ash_wednesday or is_good_friday:
-            if is_lny_exempt: # 大小斋通常很严格，但按用户要求如果碰上农历年豁免
-                fasting_tag = "免大小齋"
-            else:
-                fasting_tag = "大小齋"
-        # 优先级 2: 小斋 (星期五)
+            fasting_tag = "免大小齋" if is_lny_exempt else "大小齋"
         elif is_friday:
-            if is_exempt: # 农历年 OR 重大节日
-                fasting_tag = "免小齋"
-            else:
-                fasting_tag = "小齋"
+            fasting_tag = "免小齋" if is_exempt else "小齋"
         
         if fasting_tag:
             events_list.append(fasting_tag)
@@ -300,7 +293,7 @@ if __name__ == "__main__":
     ]
     
     all_raw_events = []
-    print("🚀 启动任务 (2026-2029) + 综合规则(首六/首七/罢工/豁免)...")
+    print("🚀 启动任务 (2026-2029) + 节日黄 + 过滤主显后...")
     
     for task in TASKS:
         if all_raw_events: time.sleep(random.randint(5, 8))
@@ -312,7 +305,6 @@ if __name__ == "__main__":
 
     if all_raw_events:
         processed_events = process_special_rules(all_raw_events)
-        
         print(f"\n📊 总计: {len(processed_events)} 天数据。正在生成...")
         generate_ics(processed_events, "catholic_calendar_2026-2029.ics", "天主教礼仪日历 2026-2029")
         if zhconv:
