@@ -8,22 +8,24 @@
 
 获取原始文件链接：
 
-在此 GitHub 仓库中找到 catholic_hk_2026.ics 文件。繁体版
-在此 GitHub 仓库中找到 catholic_cn_2026.ics 文件。简体版
+在此 GitHub 仓库中找到 catholic_calendar_2026-2029.ics 文件。繁体版
+在此 GitHub 仓库中找到 catholic_calendar_2026-2029_cn.ics 文件。简体版
 各位按需选择
 
 
-点击该文件，然后点击 "Raw" 按钮。
+点击该文件，然后点击 编辑框右上角 "Raw" 按钮。
 
 复制浏览器地址栏中的 URL（链接应以 raw.githubusercontent.com/... 开头）。
 
 在 iPhone/iPad 上订阅：
 
-打开 设置 (Settings) -> 日历 (Calendar) -> 账户 (Accounts)。
-
+方法一：打开 设置 (Settings) -> 日历 (Calendar) -> 账户 (Accounts)。
 点击 添加账户 (Add Account) -> 其他 (Other) -> 添加已订阅的日历 (Add Subscribed Calendar)。
-
 粘贴刚才复制的 URL。
+
+方法二：打开 日历 app ,点击最下面 日历选项 ，然后在弹出页面的左下角点击 添加日历 添加订阅日历 粘贴uRL链接地址（注意地址是以https://raw开头） 再点击 订阅 弹出页面 点击右上角 添加
+
+方法三：在苹果手机默认浏览器地址栏粘贴订阅地址 前往（enter），弹出页面 点击右上角 添加（1327）选择日历 点击完成 再点击 左上角 完成 
 
 在 Mac 上订阅：
 
