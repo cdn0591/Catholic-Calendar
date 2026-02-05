@@ -40,6 +40,35 @@ def fetch_calendar_data(url):
             
     return None
 
+def get_liturgical_emoji(cell_soup):
+    """
+    扫描单元格内部标签的 class 和 style 属性，
+    判断礼仪颜色并返回对应的 Emoji。
+    """
+    # 遍历单元格内所有子标签
+    for tag in cell_soup.find_all(True):
+        # 获取 class 列表 (转为字符串)
+        classes = " ".join(tag.get('class', [])).lower()
+        # 获取 style 属性
+        style = str(tag.get('style', '')).lower()
+        
+        # 拼接检查字符串
+        check_str = f"{classes} {style}"
+        
+        # 颜色判断逻辑 (优先级：绿 > 紫 > 红 > 白)
+        if 'green' in check_str:
+            return "🟢 "
+        elif 'violet' in check_str or 'purple' in check_str:
+            return "🟣 "
+        elif 'red' in check_str:
+            return "🔴 "
+        elif 'white' in check_str:
+            return "⚪ "
+        elif 'gold' in check_str or 'yellow' in check_str:
+            return "🟡 "
+            
+    return ""
+
 def parse_html(html_content, target_year):
     soup = BeautifulSoup(html_content, 'html.parser')
     
@@ -102,6 +131,7 @@ def parse_html(html_content, target_year):
         for cell in cells:
             cell_text = cell.get_text(strip=True, separator=' ')
             
+            # 基础过滤
             if re.match(r'^[\d\s/-]+$', cell_text) or re.match(r'^\d+月\d+日$', cell_text): continue
             if cell_text in month_names: continue
             if cell_text in exclude_exact_match: continue
@@ -109,9 +139,12 @@ def parse_html(html_content, target_year):
             if cell_text.replace('*', '').strip() in ['自', 'O', 'M']: continue
             if len(cell_text) < 2 and not re.search(r'[\u4e00-\u9fff]', cell_text): continue
 
+            # === 核心修改：获取颜色 Emoji ===
+            emoji_prefix = get_liturgical_emoji(cell)
+
+            # 文本清洗
             clean_text = cell_text.replace('自*', '').replace('自 ', '').strip()
             clean_text = re.sub(r'^\d+\s*', '', clean_text)
-            
             clean_text = re.sub(r'([\u4e00-\u9fff])\s+([\u4e00-\u9fff])', r'\1\2', clean_text)
 
             if len(clean_text) > 1:
@@ -120,8 +153,13 @@ def parse_html(html_content, target_year):
                     if dt not in events_map:
                         events_map[dt] = []
                     
-                    if clean_text not in events_map[dt]:
-                        events_map[dt].append(clean_text)
+                    # 组合 Emoji 和 文本
+                    final_text = f"{emoji_prefix}{clean_text}"
+                    
+                    # 去重检查 (只检查文本部分，忽略 emoji 差异，防止同一节日因颜色判定不同重复)
+                    # 但为了简单，直接检查完整字符串
+                    if final_text not in events_map[dt]:
+                        events_map[dt].append(final_text)
                 except ValueError:
                     continue
 
@@ -151,6 +189,7 @@ def generate_ics(events, output_file, calendar_name, year, convert_to_simplified
             
             summary_text = e['summary']
             if convert_to_simplified and zhconv:
+                # 繁简转换时，emoji 不会被影响，因为它们不是中文字符
                 summary_text = zhconv.convert(summary_text, 'zh-cn')
                 
             uid = hashlib.md5(f"{e['date']}{summary_text}".encode()).hexdigest() + "@gcatholic"
@@ -172,20 +211,18 @@ if __name__ == "__main__":
         { "year": 2029, "url": "https://gcatholic.org/calendar/2029/General-D-zt" }
     ]
     
-    # 用于存储所有年份的总数据
     master_events = []
 
-    print("🚀 启动批量抓取任务 (2026-2029)...")
+    print("🚀 启动批量抓取任务 (2026-2029) + 颜色识别...")
     
     for task in TASKS:
         html = fetch_calendar_data(task['url'])
         if html:
             extracted_events = parse_html(html, task['year'])
-            master_events.extend(extracted_events) # 将数据加入总表
+            master_events.extend(extracted_events)
         else:
             print(f"❌ 严重错误: 无法获取 {task['year']} 年数据，该年份将被跳过。")
 
-    # 按时间排序确保顺序正确
     master_events.sort(key=lambda x: x['date'])
     
     print(f"\n📊 统计: 4年共收集到 {len(master_events)} 条数据，准备生成合并文件...")
